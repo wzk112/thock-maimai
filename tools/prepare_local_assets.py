@@ -52,7 +52,7 @@ def prepare(source, output):
     if source == output or source in output.parents:
         raise ValueError('Choose a separate output directory')
     output.mkdir(parents=True, exist_ok=True)
-    emitters = json.loads((source/'maimai-fireworks.json').read_text())
+    emitters = json.loads((source/'maimai-fireworks.json').read_text(encoding='utf-8'))
     names = {'maimai-fireworks.json'}
     for emitter in emitters:
         names.update(emitter['textures'])
@@ -61,7 +61,7 @@ def prepare(source, output):
             raise ValueError('Unsafe asset filename')
         shutil.copy2(source/name, output/name)
     if any(e['material'] == 49 for e in emitters):
-        (output/'rainbow.hlsl').write_text(convert_shader((source/'maimai-rainbow.fsh').read_text()), encoding='utf-8')
+        (output/'rainbow.hlsl').write_text(convert_shader((source/'maimai-rainbow.fsh').read_text(encoding='utf-8')), encoding='utf-8')
     sounds = {'answer.wav', 'tap.wav', 'touch.wav', 'break-perfect.wav', 'break-critical.wav', 'touch-firework.wav'}
     with zipfile.ZipFile(source/'maimai-packs.zip') as pack:
         for sound in sounds:

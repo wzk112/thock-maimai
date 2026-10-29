@@ -233,7 +233,16 @@ static int selfTest(HINSTANCE instance,const fs::path& root,const fs::path& fold
     auto sdr=renderer.proof(sim,.20,1,root/"preview-sdr.png"),hdr=renderer.proof(sim,.20,16,{});
     Json proof={{"sdrPeak",sdr.peak},{"hdrPeak",hdr.peak},{"transparentCorner",sdr.cornerAlpha},{"visiblePixels",sdr.visible},{"defaultHdr",Settings{}.hdr}};
     if(sdr.peak>1.001||hdr.peak<1.1||sdr.cornerAlpha>.001||sdr.visible<100)throw std::runtime_error("Pixel validation failed: "+proof.dump());
-    Audio audio(assets);for(auto& wave:audio.waves)if(wave.pcm.empty())throw std::runtime_error("Empty audio");proof["wavFilesValidated"]=audio.waves.size();proof["audioDeviceAvailable"]=audio.available;
+    Audio audio(assets);Json samples=Json::array();
+    for(size_t index=0;index<audio.waves.size();++index){auto& wave=audio.waves[index];
+        if(wave.pcm.empty())throw std::runtime_error("Empty audio");
+        int peak=0;double energy=0;
+        for(size_t i=0;i+1<wave.pcm.size();i+=2){int16_t sample=0;std::memcpy(&sample,wave.pcm.data()+i,2);peak=std::max(peak,std::abs(int(sample)));energy+=double(sample)*sample;}
+        if(peak<32 || peak>=32767)throw std::runtime_error("Silent or clipped source audio");
+        samples.push_back({{"file",soundFiles[index]},{"peak",peak/32768.},{"rms",std::sqrt(energy/(wave.pcm.size()/2))/32768.},
+            {"seconds",double(wave.pcm.size())/wave.format.nAvgBytesPerSec}});
+    }
+    proof["audioSamples"]=samples;proof["wavFilesValidated"]=audio.waves.size();proof["audioDeviceAvailable"]=audio.available;
     auto o=renderer.createOverlay(instance,MonitorFromPoint({0,0},MONITOR_DEFAULTTOPRIMARY));renderer.draw(*o,sim,.2,false);
     proof["overlayCreated"]=IsWindowVisible(o->hwnd)!=FALSE;proof["noActivate"]=(GetWindowLongPtr(o->hwnd,GWL_EXSTYLE)&WS_EX_NOACTIVATE)!=0;
     proof["clickThrough"]=(GetWindowLongPtr(o->hwnd,GWL_EXSTYLE)&WS_EX_TRANSPARENT)!=0;
