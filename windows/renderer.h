@@ -1,5 +1,6 @@
 #pragma once
 #include "core.h"
+#include "assets.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi1_6.h>
@@ -23,7 +24,7 @@ class Renderer {
     void scene(ID3D11RenderTargetView* target,int width,int height,const Simulation& sim,double now);
     void finish(ID3D11RenderTargetView* target,ID3D11ShaderResourceView* source,int w,int h,float range,float white);
 public:
-    Renderer(const fs::path& executable,const fs::path& assets,const Simulation& sim,bool forceWarp=false);
+    Renderer(const Assets& assets,const Simulation& sim,bool forceWarp=false);
     struct Overlay {
         HWND hwnd=nullptr;HMONITOR monitor=nullptr;int width=0,height=0;
         Com<IDXGISwapChain1> swap; Com<IDCompositionDevice> composition;

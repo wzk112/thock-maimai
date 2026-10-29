@@ -95,12 +95,14 @@ class Simulation {
 public:
     Json emitters=Json::array(); std::vector<Burst> bursts;
     void load(const fs::path& root) {
-        auto list=Json::parse(readText(root/"maimai-fireworks.json"));
+        loadJson(Json::parse(readText(root/"maimai-fireworks.json")));
+    }
+    void loadJson(Json list) {
         if(!list.is_array() || list.empty() || list.size()>32) throw std::runtime_error("Invalid emitter count");
         size_t total=0;
         for(auto& e:list) {
             if(e.at("textures").size()>2) throw std::runtime_error("Too many textures");
-            for(auto& n:e.at("textures")) safeFile(root,n.get<std::string>());
+            for(auto& n:e.at("textures")) safeFile({},n.get<std::string>());
             double rate=e.at("rate"), duration=e.at("duration"), delay=e.at("delay");
             if(!std::isfinite(rate+duration+delay) || rate<0 || rate>500 || duration<0 || duration>5 || delay<0 || delay>5)
                 throw std::runtime_error("Invalid emitter timing");

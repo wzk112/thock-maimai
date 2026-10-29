@@ -10,12 +10,12 @@ static Com<ID3DBlob> compile(const std::string& source,const char* entry,const c
     if(FAILED(hr))throw std::runtime_error(error?std::string((char*)error->GetBufferPointer(),error->GetBufferSize()):"Shader compile failed");
     return code;
 }
-Renderer::Renderer(const fs::path& executable,const fs::path& assets,const Simulation& sim,bool warp) {
+Renderer::Renderer(const Assets& assets,const Simulation& sim,bool warp) {
     auto flags=D3D11_CREATE_DEVICE_BGRA_SUPPORT;
     HRESULT result=D3D11CreateDevice(nullptr,warp?D3D_DRIVER_TYPE_WARP:D3D_DRIVER_TYPE_HARDWARE,nullptr,flags,nullptr,0,D3D11_SDK_VERSION,&device,nullptr,&context);
     if(FAILED(result)&&!warp) result=D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_WARP,nullptr,flags,nullptr,0,D3D11_SDK_VERSION,&device,nullptr,&context);
     hrCheck(result,"Create Direct3D device");
-    auto source=readText(executable/"effect.hlsl");
+    auto source=Assets::embedded("effect.hlsl");
     auto vs=compile(source,"SpriteVertex","vs_5_0"),fv=compile(source,"FullVertex","vs_5_0");
     auto ps=compile(source,"SpritePixel","ps_5_0"),fp=compile(source,"FinishPixel","ps_5_0");
     hrCheck(device->CreateVertexShader(vs->GetBufferPointer(),vs->GetBufferSize(),nullptr,&spriteVS),"Sprite vertex");
@@ -23,7 +23,7 @@ Renderer::Renderer(const fs::path& executable,const fs::path& assets,const Simul
     hrCheck(device->CreatePixelShader(ps->GetBufferPointer(),ps->GetBufferSize(),nullptr,&spritePS),"Sprite pixel");
     hrCheck(device->CreatePixelShader(fp->GetBufferPointer(),fp->GetBufferSize(),nullptr,&finishPS),"Finish pixel");
     bool needsRainbow=false;for(auto& e:sim.emitters)if(e["material"]==49)needsRainbow=true;
-    if(needsRainbow){auto r=compile(source+"\n"+readText(assets/"rainbow.hlsl"),"RainbowPixel","ps_5_0");
+    if(needsRainbow){auto r=compile(source+"\n"+assets.read("rainbow.hlsl"),"RainbowPixel","ps_5_0");
         hrCheck(device->CreatePixelShader(r->GetBufferPointer(),r->GetBufferSize(),nullptr,&rainbowPS),"Rainbow pixel");}
     D3D11_BUFFER_DESC cb{};cb.ByteWidth=sizeof(Parameters);cb.Usage=D3D11_USAGE_DEFAULT;cb.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
     hrCheck(device->CreateBuffer(&cb,nullptr,&constants),"Constants");
@@ -37,9 +37,11 @@ Renderer::Renderer(const fs::path& executable,const fs::path& assets,const Simul
     hrCheck(device->CreateRasterizerState(&rd,&raster),"Rasterizer");
     Com<IWICImagingFactory> wic;hrCheck(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&wic)),"WIC");
     for(auto& e:sim.emitters) for(auto& n:e["textures"]){auto name=n.get<std::string>();if(textures.count(name))continue;
-        auto path=safeFile(assets,name);if(fs::file_size(path)>16*1024*1024)throw std::runtime_error("Texture too large");
+        auto bytes=assets.read(name);Com<IWICStream> stream;
+        hrCheck(wic->CreateStream(&stream),"PNG stream");
+        hrCheck(stream->InitializeFromMemory(reinterpret_cast<BYTE*>(bytes.data()),DWORD(bytes.size())),"PNG memory");
         Com<IWICBitmapDecoder> decoder;Com<IWICBitmapFrameDecode> frame;Com<IWICFormatConverter> converter;
-        hrCheck(wic->CreateDecoderFromFilename(path.c_str(),nullptr,GENERIC_READ,WICDecodeMetadataCacheOnLoad,&decoder),"Load PNG");
+        hrCheck(wic->CreateDecoderFromStream(stream.Get(),nullptr,WICDecodeMetadataCacheOnLoad,&decoder),"Load PNG");
         hrCheck(decoder->GetFrame(0,&frame),"PNG frame");UINT width=0,height=0;frame->GetSize(&width,&height);
         if(!width||!height||width>4096||height>4096)throw std::runtime_error("Texture dimension limit");
         hrCheck(wic->CreateFormatConverter(&converter),"PNG convert");

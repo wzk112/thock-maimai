@@ -4,8 +4,8 @@
 #include <cstring>
 #include <atomic>
 struct Wave { WAVEFORMATEX format{};std::vector<uint8_t> pcm; };
-inline Wave readWave(const fs::path& path){
-    auto raw=readText(path,16*1024*1024);auto* b=reinterpret_cast<const uint8_t*>(raw.data());
+inline Wave readWave(const std::string& raw){
+    auto* b=reinterpret_cast<const uint8_t*>(raw.data());
     if(raw.size()<12||std::memcmp(b,"RIFF",4)||std::memcmp(b+8,"WAVE",4))throw std::runtime_error("Invalid WAV header");
     Wave w;bool gotFormat=false,gotData=false;
     for(size_t i=12;i+8<=raw.size();){uint32_t n=0;std::memcpy(&n,b+i+4,4);if(n>raw.size()-i-8)throw std::runtime_error("Truncated WAV");
@@ -28,10 +28,13 @@ class Audio : public IXAudio2EngineCallback {
     struct Playing {IXAudio2SourceVoice* voice=nullptr;};std::vector<Playing> voices;
 public:
     std::array<Wave,6> waves;bool available=false;
-    explicit Audio(const fs::path& folder){for(size_t i=0;i<waves.size();++i)waves[i]=readWave(folder/soundFiles[i]);initialize();}
+    size_t submitted=0;
+    HRESULT lastError=S_OK;
+    size_t activeVoices() const {return voices.size();}
+    explicit Audio(const Assets& assets){for(size_t i=0;i<waves.size();++i)waves[i]=readWave(assets.read(soundFiles[i]));initialize();}
     void initialize(){stop();if(master){master->DestroyVoice();master=nullptr;}if(engine)engine->UnregisterForCallbacks(this);engine.Reset();available=false;invalidated.store(false);
-        if(FAILED(XAudio2Create(&engine)))return;
-        engine->RegisterForCallbacks(this);available=SUCCEEDED(engine->CreateMasteringVoice(&master));
+        lastError=XAudio2Create(&engine);if(FAILED(lastError))return;
+        engine->RegisterForCallbacks(this);lastError=engine->CreateMasteringVoice(&master);available=SUCCEEDED(lastError);
     }
     ~Audio(){if(engine)engine->UnregisterForCallbacks(this);stop();if(master)master->DestroyVoice();}
     void reap(){voices.erase(std::remove_if(voices.begin(),voices.end(),[](auto& p){XAUDIO2_VOICE_STATE s{};p.voice->GetState(&s,XAUDIO2_VOICE_NOSAMPLESPLAYED);
@@ -45,6 +48,6 @@ public:
         if(FAILED(engine->CreateSourceVoice(&voice,&w.format)))return false;
         voice->SetVolume(volume);XAUDIO2_BUFFER b{};b.Flags=XAUDIO2_END_OF_STREAM;b.AudioBytes=UINT32(w.pcm.size());b.pAudioData=w.pcm.data();
         if(FAILED(voice->SubmitSourceBuffer(&b))||FAILED(voice->Start())){voice->DestroyVoice();return false;}
-        voices.push_back({voice});return true;
+        voices.push_back({voice});++submitted;return true;
     }
 };

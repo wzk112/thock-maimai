@@ -1,0 +1,6 @@
+Game-derived media and shader data
+
+The project maintainer has confirmed authorization to redistribute these files.
+Copyright remains with the respective game rights holders. These files are NOT
+relicensed under the application MIT license. This is an independent project
+and does not imply endorsement by SEGA.

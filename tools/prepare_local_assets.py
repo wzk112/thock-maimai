@@ -69,7 +69,7 @@ def prepare(source, output):
             if not candidates:
                 raise FileNotFoundError(sound)
             (output/sound).write_bytes(pack.read(candidates[0]))
-    (output/'ASSET-LICENSE.txt').write_text('Locally supplied game resources. Not included in the public repository.\nNot covered by the application MIT license.\n', encoding='utf-8')
+    (output/'ASSET-LICENSE.txt').write_text('Locally supplied game resources. Retain original rights and distribution terms.\nNot covered by the application MIT license.\n', encoding='utf-8')
 
 
 if __name__ == '__main__':

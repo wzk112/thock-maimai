@@ -19,39 +19,56 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir build -C Release --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Generate original demo media
-        run: python tools/generate_demo.py build/Release/assets
+      - name: Prepare Windows audio services and isolated single-file folder
+        run: |
+          Get-Service AudioEndpointBuilder,Audiosrv | ForEach-Object {
+            if ($_.Status -ne 'Running') { Start-Service $_.Name -ErrorAction Continue }
+          }
+          Get-Service AudioEndpointBuilder,Audiosrv | Format-Table
+          Get-CimInstance Win32_SoundDevice | Select-Object Name,Status
+          New-Item -ItemType Directory -Force 'build/standalone/独立 测试'
+          Copy-Item 'build/Release/Thock maimai.exe' 'build/standalone/独立 测试/Thock maimai.exe'
+          if ((Get-ChildItem 'build/standalone/独立 测试').Count -ne 1) { throw 'Single-file test must start with only the EXE' }
       - name: Validate Direct3D pixels, transparency, audio decoding and overlay
         run: |
-          $p = Start-Process -FilePath 'build/Release/Thock maimai.exe' -ArgumentList '--self-test' -PassThru
+          $p = Start-Process -FilePath 'build/standalone/独立 测试/Thock maimai.exe' -ArgumentList '--self-test' -PassThru
           if (!$p.WaitForExit(90000)) { $p.Kill(); throw 'Self-test timed out' }
           if ($p.ExitCode -ne 0) {
-            if (Test-Path build/Release/error.txt) { Get-Content build/Release/error.txt }
+            if (Test-Path 'build/standalone/独立 测试/error.txt') { Get-Content 'build/standalone/独立 测试/error.txt' }
             throw "Self-test failed: $($p.ExitCode)"
           }
-          Get-Content build/Release/self-test.json
-      - name: Package portable app
+          Get-Content 'build/standalone/独立 测试/self-test.json'
+      - name: Exercise the running app with Windows keyboard input
         run: |
-          New-Item -ItemType Directory -Force build/package
-          Copy-Item 'build/Release/Thock maimai.exe',build/Release/effect.hlsl,LICENSE,README.md build/package/
-          Copy-Item build/Release/assets build/package/assets -Recurse
-          Copy-Item windows/vendor/json.LICENSE build/package/json.LICENSE
-          Compress-Archive -Path build/package/* -DestinationPath build/Thock-maimai-Windows-x64.zip
+          $p = Start-Process -FilePath 'build/standalone/独立 测试/Thock maimai.exe' -ArgumentList '--integration-test' -PassThru
+          if (!$p.WaitForExit(120000)) { $p.Kill(); throw 'Integration test timed out' }
+          if (Test-Path 'build/standalone/独立 测试/integration-test.json') { Get-Content 'build/standalone/独立 测试/integration-test.json' }
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path 'build/standalone/独立 测试/error.txt') { Get-Content 'build/standalone/独立 测试/error.txt' }
+            throw "Integration test failed: $($p.ExitCode)"
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: Windows-x64
           path: |
-            build/Thock-maimai-Windows-x64.zip
-            build/Release/self-test.json
-            build/Release/preview-sdr.png
-            build/Release/error.txt
+            build/Release/Thock maimai.exe
+            build/standalone/独立 测试/*.json
+            build/standalone/独立 测试/*.png
+            build/standalone/独立 测试/error.txt
           if-no-files-found: warn
   macos:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
-      - name: Generate demo effect resources
-        run: python3 tools/generate_demo.py Thock/MaimaiResources
       - name: Build macOS source
         run: xcodebuild -project Thock.xcodeproj -scheme Thock -configuration Release -derivedDataPath build CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build
+      - name: Package macOS app
+        run: |
+          codesign --force --deep --sign - 'build/Build/Products/Release/Thock maimai.app'
+          codesign --verify --deep --strict 'build/Build/Products/Release/Thock maimai.app'
+          ditto -c -k --sequesterRsrc --keepParent 'build/Build/Products/Release/Thock maimai.app' build/Thock-maimai-macOS-arm64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macOS-arm64
+          path: build/Thock-maimai-macOS-arm64.zip
