@@ -1,0 +1,13 @@
+.DS_Store
+xcuserdata/
+*.xcuserstate
+build*/
+assets/
+Thock/MaimaiResources/*
+!Thock/MaimaiResources/Thock-LICENSE.txt
+*.zip
+*.exe
+*.pdb
+*.wav
+__pycache__/
+private-assets/

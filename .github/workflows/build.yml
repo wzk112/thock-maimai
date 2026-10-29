@@ -1,0 +1,57 @@
+name: Build and check
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure and build
+        run: |
+          cmake -S windows -B build -A x64
+          cmake --build build --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Generate original demo media
+        run: python tools/generate_demo.py build/Release/assets
+      - name: Validate Direct3D pixels, transparency, audio decoding and overlay
+        run: |
+          $p = Start-Process -FilePath 'build/Release/Thock maimai.exe' -ArgumentList '--self-test' -PassThru
+          if (!$p.WaitForExit(90000)) { $p.Kill(); throw 'Self-test timed out' }
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path build/Release/error.txt) { Get-Content build/Release/error.txt }
+            throw "Self-test failed: $($p.ExitCode)"
+          }
+          Get-Content build/Release/self-test.json
+      - name: Package portable app
+        run: |
+          New-Item -ItemType Directory -Force build/package
+          Copy-Item 'build/Release/Thock maimai.exe',build/Release/effect.hlsl,LICENSE,README.md build/package/
+          Copy-Item build/Release/assets build/package/assets -Recurse
+          Copy-Item windows/vendor/json.LICENSE build/package/json.LICENSE
+          Compress-Archive -Path build/package/* -DestinationPath build/Thock-maimai-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Windows-x64
+          path: |
+            build/Thock-maimai-Windows-x64.zip
+            build/Release/self-test.json
+            build/Release/preview-sdr.png
+            build/Release/error.txt
+          if-no-files-found: warn
+  macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate demo effect resources
+        run: python3 tools/generate_demo.py Thock/MaimaiResources
+      - name: Build macOS source
+        run: xcodebuild -project Thock.xcodeproj -scheme Thock -configuration Release -derivedDataPath build CODE_SIGNING_ALLOWED=NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build

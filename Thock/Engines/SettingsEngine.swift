@@ -1,0 +1,222 @@
+import Foundation
+
+final class SettingsEngine {
+    static let shared = SettingsEngine()
+
+    private init() {}
+
+    // MARK: - Open at Login
+
+    func toggleOpenAtLogin() -> Bool {
+        let newState = !SettingsManager.shared.openAtLogin
+        SettingsManager.shared.openAtLogin = newState
+        OpenAtLoginManager.setEnabled(newState)
+        NotificationCenter.default.post(name: .settingsDidChange, object: nil)
+        return newState
+    }
+
+    func isOpenAtLoginEnabled() -> Bool {
+        return SettingsManager.shared.openAtLogin
+    }
+
+    func setOpenAtLogin(_ enabled: Bool) {
+        SettingsManager.shared.openAtLogin = enabled
+        OpenAtLoginManager.setEnabled(enabled)
+        NotificationCenter.default.post(name: .settingsDidChange, object: nil)
+    }
+
+    // MARK: - Modifier Key Sound
+
+    func toggleModifierKeySound() -> Bool {
+        let newState = !SettingsManager.shared.disableModifierKeys
+        SettingsManager.shared.disableModifierKeys = newState
+        NotificationCenter.default.post(name: .settingsDidChange, object: nil)
+        return newState
+    }
+
+    func isModifierKeySoundDisabled() -> Bool {
+        return SettingsManager.shared.disableModifierKeys
+    }
+
+    func setModifierKeySound(_ disabled: Bool) {
+        SettingsManager.shared.disableModifierKeys = disabled
+        NotificationCenter.default.post(name: .settingsDidChange, object: nil)
+    }
+
+    // MARK: - Cleaning Mode
+
+    func isCleaningModeEnabled() -> Bool {
+        return SettingsManager.shared.isCleaningMode
+    }
+
+    @discardableResult
+    func toggleCleaningMode() -> Bool {
+        let newState = !SettingsManager.shared.isCleaningMode
+        SettingsManager.shared.isCleaningMode = newState
+        NotificationCenter.default.post(name: .cleaningModeDidChange, object: nil)
+        return newState
+    }
+
+    func setCleaningMode(_ enabled: Bool) {
+        SettingsManager.shared.isCleaningMode = enabled
+        NotificationCenter.default.post(name: .cleaningModeDidChange, object: nil)
+    }
+
+    // MARK: - Soundpack Selection
+
+    func selectKeyboardSoundpack(_ soundpack: Soundpack) {
+        SoundpackEngine.shared.applyKeyboard(soundpack: soundpack)
+    }
+
+    func selectMouseSoundpack(_ soundpack: Soundpack) {
+        SoundpackEngine.shared.applyMouse(soundpack: soundpack)
+    }
+
+    func refreshMenu() {
+        NotificationCenter.default.post(name: .settingsDidChange, object: nil)
+    }
+
+    // MARK: - Rapid Key Events
+
+    func toggleIgnoreRapidKeyEvents() -> Bool {
+        let newState = !SettingsManager.shared.ignoreRapidKeyEvents
+        SettingsManager.shared.ignoreRapidKeyEvents = newState
+        NotificationCenter.default.post(name: .settingsDidChange, object: nil)
+        return newState
+    }
+
+    func isIgnoreRapidKeyEventsEnabled() -> Bool {
+        return SettingsManager.shared.ignoreRapidKeyEvents
+    }
+
+    func setIgnoreRapidKeyEvents(_ enabled: Bool) {
+        SettingsManager.shared.ignoreRapidKeyEvents = enabled
+        NotificationCenter.default.post(name: .settingsDidChange, object: nil)
+    }
+
+    // MARK: - Auto Mute on Music Playback
+
+    func toggleAutoMuteOnMusicPlayback() -> Bool {
+        let newState = !SettingsManager.shared.autoMuteOnMusicPlayback
+        SettingsManager.shared.autoMuteOnMusicPlayback = newState
+        NotificationCenter.default.post(name: .settingsDidChange, object: nil)
+        return newState
+    }
+
+    func isAutoMuteOnMusicPlaybackEnabled() -> Bool {
+        return SettingsManager.shared.autoMuteOnMusicPlayback
+    }
+
+    func setAutoMuteOnMusicPlayback(_ enabled: Bool) {
+        SettingsManager.shared.autoMuteOnMusicPlayback = enabled
+        NotificationCenter.default.post(name: .settingsDidChange, object: nil)
+    }
+
+    // MARK: - Idle Timeout
+
+    func getIdleTimeoutSeconds() -> TimeInterval {
+        return SettingsManager.shared.idleTimeoutSeconds
+    }
+
+    func setIdleTimeoutSeconds(_ seconds: TimeInterval) {
+        SettingsManager.shared.idleTimeoutSeconds = seconds
+        NotificationCenter.default.post(name: .settingsDidChange, object: nil)
+    }
+
+    // MARK: - Audio Buffer Size
+
+    func getAudioBufferSize() -> UInt32 {
+        return SettingsManager.shared.audioBufferSize
+    }
+
+    func setAudioBufferSize(_ bufferSize: UInt32) {
+        SettingsManager.shared.audioBufferSize = bufferSize
+        NotificationCenter.default.post(name: .settingsDidChange, object: nil)
+    }
+
+    // MARK: - Selected Audio Device
+
+    func getSelectedAudioDeviceUID() -> String? {
+        return SettingsManager.shared.selectedAudioDeviceUID
+    }
+
+    func setSelectedAudioDeviceUID(_ uid: String?) {
+        SettingsManager.shared.selectedAudioDeviceUID = uid
+        NotificationCenter.default.post(name: .audioDeviceDidChange, object: nil)
+    }
+
+    // MARK: - Volume
+
+    func getVolume(for deviceUID: String) -> Float {
+        let perDeviceVolumes = SettingsManager.shared.perDeviceVolumes
+        return perDeviceVolumes[deviceUID] ?? 0.5
+    }
+
+    func setVolume(_ volume: Float, for deviceUID: String) {
+        let clampedVolume = max(0.0, min(1.0, volume))
+        var perDeviceVolumes = SettingsManager.shared.perDeviceVolumes
+        perDeviceVolumes[deviceUID] = clampedVolume
+        SettingsManager.shared.perDeviceVolumes = perDeviceVolumes
+        NotificationCenter.default.post(name: .volumeDidChange, object: nil)
+    }
+
+    func getVolume() -> Float {
+        let deviceUID = SoundManager.shared.getCurrentOutputDeviceUID()
+        return getVolume(for: deviceUID)
+    }
+
+    func setVolume(_ volume: Float) {
+        let deviceUID = SoundManager.shared.getCurrentOutputDeviceUID()
+        setVolume(volume, for: deviceUID)
+    }
+
+    // MARK: - Pitch Variation
+
+    func getPitchVariation() -> Float {
+        return SettingsManager.shared.pitchVariation
+    }
+
+    func setPitchVariation(_ variation: Float) {
+        SettingsManager.shared.pitchVariation = variation
+        NotificationCenter.default.post(name: .settingsDidChange, object: nil)
+    }
+
+    // MARK: - Mouse Click Sound
+
+    func isMouseSoundEnabled() -> Bool {
+        return SettingsManager.shared.mouseSoundEnabled
+    }
+
+    func setMouseSoundEnabled(_ enabled: Bool) {
+        SettingsManager.shared.mouseSoundEnabled = enabled
+        NotificationCenter.default.post(name: .mouseSoundDidChange, object: nil)
+    }
+
+    // MARK: - Headphone Auto-Enable
+
+    func isAutoEnableOnHeadphoneEnabled() -> Bool {
+        return SettingsManager.shared.autoEnableOnHeadphone
+    }
+
+    func setAutoEnableOnHeadphone(_ enabled: Bool) {
+        SettingsManager.shared.autoEnableOnHeadphone = enabled
+        NotificationCenter.default.post(name: .settingsDidChange, object: nil)
+
+        // When enabling, immediately check headphone state and apply
+        if enabled {
+            let headphoneConnected = HeadphoneDetector.shared.isHeadphoneConnected()
+            AppEngine.shared.setEnabled(headphoneConnected)
+        }
+    }
+}
+
+// MARK: - Notifications
+
+extension Notification.Name {
+    static let settingsDidChange = Notification.Name("settingsDidChange")
+    static let appStateDidChange = Notification.Name("appStateDidChange")
+    static let volumeDidChange = Notification.Name("volumeDidChange")
+    static let audioDeviceDidChange = Notification.Name("audioDeviceDidChange")
+    static let mouseSoundDidChange = Notification.Name("mouseSoundDidChange")
+    static let cleaningModeDidChange = Notification.Name("cleaningModeDidChange")
+}
