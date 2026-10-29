@@ -2,7 +2,7 @@
 xcuserdata/
 *.xcuserstate
 build*/
-assets/
+/assets/
 Thock/MaimaiResources/*
 !Thock/MaimaiResources/Thock-LICENSE.txt
 *.zip

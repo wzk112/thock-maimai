@@ -35,9 +35,9 @@ float3 toLinear(float3 v) {
 float4 FinishPixel(Vertex i):SV_TARGET {
     float4 color=firstTexture.Sample(textureSampler,i.uv);
     if(color.a<=.00001)return 0;
-    float3 linear=toLinear(saturate(color.rgb/color.a));
-    float peak=max(linear.r,max(linear.g,linear.b));
+    float3 linearColor=toLinear(saturate(color.rgb/color.a));
+    float peak=max(linearColor.r,max(linearColor.g,linearColor.b));
     float high=options.y>1.001?smoothstep(.55,.9,peak):0;
     float gain=lerp(1,options.y/max(peak,.00001),high);
-    return float4(linear*gain*options.z*color.a,color.a);
+    return float4(linearColor*gain*options.z*color.a,color.a);
 }
