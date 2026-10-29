@@ -155,14 +155,14 @@ FrameProof Renderer::proof(const Simulation& sim,double now,float headroom,const
         for(UINT x=0;x<w;++x){float a=DirectX::PackedVector::XMConvertHalfToFloat(row[x*4+3]);if(x==0&&y==0)result.cornerAlpha=a;if(a>.05)++result.visible;
             for(int c=0;c<3;++c){float v=DirectX::PackedVector::XMConvertHalfToFloat(row[x*4+c]);if(std::isfinite(v))result.peak=std::max(result.peak,v);
                 float linear=std::clamp(a>0?v/a:0.f,0.f,1.f);float srgb=linear<=.0031308f?linear*12.92f:1.055f*std::pow(linear,1/2.4f)-.055f;
-                pixels[(size_t(y)*w+x)*4+c]=uint8_t(std::clamp(srgb*255,0.f,255.f));}
+                pixels[(size_t(y)*w+x)*4+(2-c)]=uint8_t(std::clamp(srgb*255,0.f,255.f));}
             pixels[(size_t(y)*w+x)*4+3]=uint8_t(std::clamp(a*255,0.f,255.f));}}
     context->Unmap(staging.Get(),0);
     if(!png.empty()){
         Com<IWICImagingFactory> wic;Com<IWICStream> stream;Com<IWICBitmapEncoder> encoder;Com<IWICBitmapFrameEncode> frame;
         hrCheck(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&wic)),"Proof WIC");hrCheck(wic->CreateStream(&stream),"Proof stream");hrCheck(stream->InitializeFromFilename(png.c_str(),GENERIC_WRITE),"Proof PNG");
         hrCheck(wic->CreateEncoder(GUID_ContainerFormatPng,nullptr,&encoder),"PNG encoder");hrCheck(encoder->Initialize(stream.Get(),WICBitmapEncoderNoCache),"PNG init");hrCheck(encoder->CreateNewFrame(&frame,nullptr),"PNG frame");hrCheck(frame->Initialize(nullptr),"Frame init");hrCheck(frame->SetSize(w,h),"PNG size");
-        WICPixelFormatGUID fmt=GUID_WICPixelFormat32bppRGBA;hrCheck(frame->SetPixelFormat(&fmt),"PNG format");hrCheck(frame->WritePixels(h,w*4,UINT(pixels.size()),pixels.data()),"PNG write");hrCheck(frame->Commit(),"PNG frame commit");hrCheck(encoder->Commit(),"PNG commit");
+        WICPixelFormatGUID fmt=GUID_WICPixelFormat32bppBGRA;hrCheck(frame->SetPixelFormat(&fmt),"PNG format");hrCheck(frame->WritePixels(h,w*4,UINT(pixels.size()),pixels.data()),"PNG write");hrCheck(frame->Commit(),"PNG frame commit");hrCheck(encoder->Commit(),"PNG commit");
     }
     return result;
 }

@@ -2,6 +2,7 @@
 #include "renderer.h"
 #include <xaudio2.h>
 #include <cstring>
+#include <atomic>
 struct Wave { WAVEFORMATEX format{};std::vector<uint8_t> pcm; };
 inline Wave readWave(const fs::path& path){
     auto raw=readText(path,16*1024*1024);auto* b=reinterpret_cast<const uint8_t*>(raw.data());
@@ -18,21 +19,26 @@ inline Wave readWave(const fs::path& path){
         w.pcm.size()%w.format.nBlockAlign)throw std::runtime_error("Use PCM16 mono/stereo WAV files");
     return w;
 }
-class Audio {
+class Audio : public IXAudio2EngineCallback {
+    std::atomic<bool> invalidated{false};
+    void STDMETHODCALLTYPE OnProcessingPassStart() override {}
+    void STDMETHODCALLTYPE OnProcessingPassEnd() override {}
+    void STDMETHODCALLTYPE OnCriticalError(HRESULT) override {invalidated.store(true);}
     Com<IXAudio2> engine;IXAudio2MasteringVoice* master=nullptr;
     struct Playing {IXAudio2SourceVoice* voice=nullptr;};std::vector<Playing> voices;
 public:
     std::array<Wave,6> waves;bool available=false;
     explicit Audio(const fs::path& folder){for(size_t i=0;i<waves.size();++i)waves[i]=readWave(folder/soundFiles[i]);initialize();}
-    void initialize(){stop();if(master){master->DestroyVoice();master=nullptr;}engine.Reset();available=false;
+    void initialize(){stop();if(master){master->DestroyVoice();master=nullptr;}if(engine)engine->UnregisterForCallbacks(this);engine.Reset();available=false;invalidated.store(false);
         if(FAILED(XAudio2Create(&engine)))return;
-        available=SUCCEEDED(engine->CreateMasteringVoice(&master));
+        engine->RegisterForCallbacks(this);available=SUCCEEDED(engine->CreateMasteringVoice(&master));
     }
-    ~Audio(){stop();if(master)master->DestroyVoice();}
+    ~Audio(){if(engine)engine->UnregisterForCallbacks(this);stop();if(master)master->DestroyVoice();}
     void reap(){voices.erase(std::remove_if(voices.begin(),voices.end(),[](auto& p){XAUDIO2_VOICE_STATE s{};p.voice->GetState(&s,XAUDIO2_VOICE_NOSAMPLESPLAYED);
         if(!s.BuffersQueued){p.voice->DestroyVoice();return true;}return false;}),voices.end());}
     void stop(){for(auto& p:voices)p.voice->DestroyVoice();voices.clear();}
     bool play(Sound sound,float volume){
+        if(invalidated.exchange(false))initialize();
         if(!available||volume<=0)return false;reap();
         if(voices.size()>=32){voices.front().voice->DestroyVoice();voices.erase(voices.begin());}
         auto& w=waves[size_t(sound)];IXAudio2SourceVoice* voice=nullptr;

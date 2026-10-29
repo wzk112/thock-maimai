@@ -17,6 +17,7 @@ class Application {
     std::vector<std::unique_ptr<Renderer::Overlay>> overlays;
     std::array<bool,256> held{};HFONT font=nullptr;HWND status=nullptr;
     double idleCleanup=0;
+    std::vector<std::pair<HWND,RECT>> controlLayout;
     static LRESULT CALLBACK procedure(HWND w,UINT m,WPARAM a,LPARAM b){
         Application* app=reinterpret_cast<Application*>(GetWindowLongPtr(w,GWLP_USERDATA));
         if(m==WM_NCCREATE){app=static_cast<Application*>(reinterpret_cast<CREATESTRUCT*>(b)->lpCreateParams);app->window=w;SetWindowLongPtr(w,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(app));}
@@ -37,8 +38,7 @@ class Application {
         setStatus(audio->available?L"已就绪 · 混合模式按 Tab 播放烟花":L"未找到音频设备 · 连接设备后点击预览重试");
     }
     void controls(){
-        font=CreateFont(-16,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Microsoft YaHei UI");
-        auto add=[&](const wchar_t* cls,const wchar_t* label,DWORD style,int x,int y,int w,int h,int id){HWND c=CreateWindowEx(0,cls,label,WS_CHILD|WS_VISIBLE|style,x,y,w,h,window,reinterpret_cast<HMENU>(INT_PTR(id)),instance,nullptr);SendMessage(c,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);return c;};
+        auto add=[&](const wchar_t* cls,const wchar_t* label,DWORD style,int x,int y,int w,int h,int id){HWND c=CreateWindowEx(0,cls,label,WS_CHILD|WS_VISIBLE|style,x,y,w,h,window,reinterpret_cast<HMENU>(INT_PTR(id)),instance,nullptr);controlLayout.push_back({c,{x,y,x+w,y+h}});return c;};
         add(L"STATIC",L"Thock maimai",0,24,20,410,28,0);
         add(L"STATIC",L"键盘音效与全屏烟花 · 单独运行即可",0,24,54,420,24,0);
         add(L"BUTTON",L"启用键盘音效",BS_AUTOCHECKBOX|WS_TABSTOP,24,94,225,26,ENABLE);
@@ -56,6 +56,12 @@ class Application {
         status=add(L"STATIC",L"加载中…",0,24,414,440,55,0);
         for(auto [id,value]:{std::pair{ENABLE,settings.enabled},{FIREWORK,settings.fireworks},{HDR,settings.hdr},{ALL,settings.allDisplays}})CheckDlgButton(window,id,value?BST_CHECKED:BST_UNCHECKED);
         SendMessage(combo,CB_SETCURSEL,settings.pack,0);
+    }
+    void scaleControls(UINT dpi){
+        HFONT previous=font;
+        font=CreateFont(-MulDiv(16,dpi,96),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Microsoft YaHei UI");
+        for(auto& [child,r]:controlLayout){SetWindowPos(child,nullptr,MulDiv(r.left,dpi,96),MulDiv(r.top,dpi,96),MulDiv(r.right-r.left,dpi,96),MulDiv(r.bottom-r.top,dpi,96),SWP_NOZORDER|SWP_NOACTIVATE);SendMessage(child,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);}
+        if(previous)DeleteObject(previous);
     }
     void selectAssets(){
         Com<IFileOpenDialog> dialog;hrCheck(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog)),"Folder chooser");
@@ -106,10 +112,10 @@ class Application {
         case WM_TIMER:if(a==1){double now=clockSeconds();sim.expire(now);if(sim.bursts.empty()){stopEffects();return 0;}for(auto& o:overlays)renderer->draw(*o,sim,now,settings.hdr);}
             if(a==2&&audio){audio->reap();if(clockSeconds()>idleCleanup)KillTimer(window,2);}return 0;
         case WM_DISPLAYCHANGE:stopEffects();held.fill(false);return 0;
-        case WM_DPICHANGED:{auto r=reinterpret_cast<RECT*>(b);SetWindowPos(window,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOACTIVATE|SWP_NOZORDER);return 0;}
+        case WM_DPICHANGED:{auto r=reinterpret_cast<RECT*>(b);SetWindowPos(window,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOACTIVATE|SWP_NOZORDER);if(!controlLayout.empty())scaleControls(HIWORD(a));return 0;}
         case WM_POWERBROADCAST:if(a==PBT_APMSUSPEND){stopEffects();held.fill(false);if(audio)audio->stop();}if(a==PBT_APMRESUMEAUTOMATIC&&audio){held.fill(false);audio->initialize();}return TRUE;
         case WM_WTSSESSION_CHANGE:if(a==WTS_SESSION_LOCK){locked=true;held.fill(false);stopEffects();if(audio)audio->stop();}if(a==WTS_SESSION_UNLOCK){locked=false;held.fill(false);}return 0;
-        case WM_DEVICECHANGE:held.fill(false);return 0;
+        case WM_INPUT_DEVICE_CHANGE:held.fill(false);return 0;
         case TRAY:if(LOWORD(b)==WM_RBUTTONUP)trayMenu();if(LOWORD(b)==WM_LBUTTONUP){ShowWindow(window,SW_SHOW);SetForegroundWindow(window);}return 0;
         }
         static const UINT taskbarCreated=RegisterWindowMessage(L"TaskbarCreated");if(m==taskbarCreated&&tray.hWnd)Shell_NotifyIcon(NIM_ADD,&tray);
@@ -121,7 +127,10 @@ public:
         if(fs::exists(config))try{settings=Settings::parse(Json::parse(readText(config)));}catch(...){settings=Settings{};}
         WNDCLASS wc{};wc.hInstance=h;wc.lpfnWndProc=procedure;wc.lpszClassName=L"FireflyMaimaiSettings";wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);wc.hIcon=LoadIcon(nullptr,IDI_APPLICATION);RegisterClass(&wc);
         HWND w=CreateWindow(wc.lpszClassName,L"Thock maimai",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,500,530,nullptr,nullptr,h,this);
-        if(!w)throw std::runtime_error("Settings window failed");controls();
+        if(!w)throw std::runtime_error("Settings window failed");controls();UINT dpi=GetDpiForWindow(window);scaleControls(dpi);
+        RECT desired{0,0,MulDiv(480,dpi,96),MulDiv(485,dpi,96)};
+        AdjustWindowRectExForDpi(&desired,DWORD(GetWindowLongPtr(window,GWL_STYLE)),FALSE,0,dpi);
+        SetWindowPos(window,nullptr,0,0,desired.right-desired.left,desired.bottom-desired.top,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
         tray.cbSize=sizeof(tray);tray.hWnd=window;tray.uID=1;tray.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;tray.uCallbackMessage=TRAY;tray.hIcon=wc.hIcon;wcscpy_s(tray.szTip,L"Thock maimai");Shell_NotifyIcon(NIM_ADD,&tray);
         RAWINPUTDEVICE keyboard{1,6,RIDEV_INPUTSINK|RIDEV_DEVNOTIFY,window};if(!RegisterRawInputDevices(&keyboard,1,sizeof(keyboard)))throw std::runtime_error("Cannot register keyboard input");
         WTSRegisterSessionNotification(window,NOTIFY_FOR_THIS_SESSION);
