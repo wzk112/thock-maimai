@@ -174,10 +174,13 @@ private extension UserDefaults {
             if standard.object(forKey: Keys.audioBufferSize) == nil {
                 return SettingsManager.defaultAudioBufferSize
             }
-            return UInt32(standard.integer(forKey: Keys.audioBufferSize))
+            // Three 64-frame buffers cover only 4 ms at 48 kHz, which can
+            // underrun even on the Core Audio callback thread. Migrate old
+            // low-latency preferences to a 16 ms safety window.
+            return UInt32(min(1024, max(256, standard.integer(forKey: Keys.audioBufferSize))))
         }
         set {
-            standard.set(newValue, forKey: Keys.audioBufferSize)
+            standard.set(min(1024, max(256, newValue)), forKey: Keys.audioBufferSize)
         }
     }
 

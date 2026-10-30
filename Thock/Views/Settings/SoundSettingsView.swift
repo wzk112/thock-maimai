@@ -144,8 +144,6 @@ struct SoundSettingsView: View {
                         subtitle: L10n.audioLatencySubtitle,
                         control: AnyView(
                             Picker("", selection: $audioBufferSize) {
-                                Text(L10n.ultraLow).tag(UInt32(64))
-                                Text(L10n.low).tag(UInt32(128))
                                 Text(L10n.normal).tag(UInt32(256))
                                 Text(L10n.high).tag(UInt32(512))
                                 Text(L10n.veryHigh).tag(UInt32(1024))

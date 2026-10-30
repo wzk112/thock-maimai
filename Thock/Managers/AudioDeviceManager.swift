@@ -211,8 +211,12 @@ final class AudioDeviceManager {
         }
 
         // Allocate buffer list
-        let bufferListPointer = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: 1)
-        defer { bufferListPointer.deallocate() }
+        // AudioBufferList has a variable-length tail; one struct is too small
+        // for devices with multiple streams (USB/aggregate audio outputs).
+        let storage = UnsafeMutableRawPointer.allocate(byteCount: Int(dataSize),
+            alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { storage.deallocate() }
+        let bufferListPointer = storage.assumingMemoryBound(to: AudioBufferList.self)
 
         let getDataStatus = AudioObjectGetPropertyData(
             deviceID,

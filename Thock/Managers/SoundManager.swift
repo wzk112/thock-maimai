@@ -10,6 +10,10 @@ final class SoundManager {
 
     // MARK: - Constants
     private static let defaultDeviceUID = "default"
+    static let maximumActiveSounds = 32
+    // Lifecycle operations can originate from key workers, device notifications or
+    // the idle timer. The render callback never takes this lock.
+    private let lifecycleLock = NSRecursiveLock()
 
     // MARK: - State
     private(set) var isReady = false
@@ -26,7 +30,9 @@ final class SoundManager {
     private let queueStateLock = NSLock() // Protects audioQueue, isQueueRunning, isReady, initRetryCount and audioQueueGeneration
 
     // MARK: - Audio Format
-    private var sampleRate: Float64 = 44100.0
+    // Keep decoded PCM stable across output-device/sample-rate changes. Core Audio
+    // converts this stream to the hardware format; custom packs are converted on load.
+    private let sampleRate: Float64 = 48000.0
     private let channelCount: UInt32 = 2
     private let bitsPerChannel: UInt32 = 32
     private var framesPerBuffer: UInt32
@@ -40,8 +46,35 @@ final class SoundManager {
     private var activeSounds: [ActiveSound] = []
     private let activeSoundsLock = NSLock()
 
-    // MARK: - Idle State Tracking
-    private var idleCallbackCount: Int = 0
+    #if DEBUG
+    private var renderedBufferCount = 0
+    private var renderedOnMainThread = false
+    struct AudioDiagnostics {
+        let buffers: Int
+        let activeVoices: Int
+        let sourceFramesConsumed: Int
+        let callbackOnMainThread: Bool
+        let running: Bool
+        let ready: Bool
+    }
+    func audioDiagnostics() -> AudioDiagnostics {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        activeSoundsLock.lock()
+        defer { activeSoundsLock.unlock() }
+        return AudioDiagnostics(buffers: renderedBufferCount, activeVoices: activeSounds.count,
+            sourceFramesConsumed: activeSounds.reduce(0) { $0 + $1.currentFrame },
+            callbackOnMainThread: renderedOnMainThread, running: isQueueRunning, ready: isReady)
+    }
+    func stopIfIdleForTesting() { stopQueueIfIdle() }
+    func setTestVolume(_ value: Float) -> Float {
+        volumeLock.lock()
+        defer { volumeLock.unlock() }
+        let previous = volume
+        volume = value
+        return previous
+    }
+    #endif
 
     // MARK: - Volume Control
     private var volume: Float = 0.5
@@ -76,9 +109,7 @@ final class SoundManager {
     // MARK: - Initialization
     private init() {
         framesPerBuffer = currentBufferSize
-        detectHardwareSampleRate()
         setupAudioFormat()
-        configureLowLatencyAudio()
         createAudioQueue()
 
         // Listen for settings changes
@@ -129,6 +160,8 @@ final class SoundManager {
     }
 
     @objc private func handleSettingsChange() {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         let newBufferSize = SettingsManager.shared.audioBufferSize
 
         // Handle buffer size change
@@ -142,6 +175,8 @@ final class SoundManager {
     }
 
     @objc private func handleAudioDeviceChange() {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         Logger.audio.info("Audio device selection changed, reinitializing audio queue")
         reinitializeAudioQueue(with: currentBufferSize)
 
@@ -149,6 +184,8 @@ final class SoundManager {
     }
 
     @objc private func handleSystemDefaultDeviceChange() {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         // only if selected "System Default"
         if SettingsEngine.shared.getSelectedAudioDeviceUID() == nil {
             Logger.audio.info("System default device changed while using System Default, reinitializing audio queue")
@@ -163,6 +200,8 @@ final class SoundManager {
     }
 
     @objc private func handleDeviceListChange() {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         Logger.audio.info("Audio device list changed, checking if selected device status changed")
 
         // Check if specific device selected
@@ -209,7 +248,8 @@ final class SoundManager {
     }
 
     private func reinitializeAudioQueue(with newBufferSize: UInt32, isRetry: Bool = false) {
-        detectHardwareSampleRate()
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
 
         // Cancel idle timer
         timerLock.lock()
@@ -248,7 +288,6 @@ final class SoundManager {
 
         // Reinitialize audio queue
         setupAudioFormat()
-        configureLowLatencyAudio()
         createAudioQueue()
 
         Logger.audio.info("Audio queue reinitialized with buffer size: \(newBufferSize) frames")
@@ -256,8 +295,9 @@ final class SoundManager {
 
     /// Reinitializes the audio system after wake from sleep.
     func reinitializeAfterWake() {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         Logger.audio.info("Reinitializing audio system after wake from sleep")
-        detectHardwareSampleRate()
         reinitializeAudioQueue(with: currentBufferSize)
         updateVolumeFromSettings(postNotification: true)
     }
@@ -301,6 +341,8 @@ final class SoundManager {
     }
 
     private func stopQueueIfIdle() {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         activeSoundsLock.lock()
         let isEmpty = activeSounds.isEmpty
         activeSoundsLock.unlock()
@@ -311,7 +353,8 @@ final class SoundManager {
         let generation = audioQueueGeneration
         queueStateLock.unlock()
 
-        guard isEmpty && isRunning, let queue = queue else { return }
+        guard isRunning, let queue = queue else { return }
+        guard isEmpty else { resetIdleTimer(); return }
 
         // Validate generation before calling core audio api
         queueStateLock.lock()
@@ -358,7 +401,6 @@ final class SoundManager {
             return
         }
 
-        idleCallbackCount = 0
         // Re-prime all buffers
         Logger.audio.debug("Re-priming \(self.audioBuffers.count) buffers before restart")
         for buffer in audioBuffers {
@@ -382,45 +424,15 @@ final class SoundManager {
             // Queue failed to restart, full reinit to recover
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
+                self.lifecycleLock.lock()
+                defer { self.lifecycleLock.unlock() }
+                guard self.audioQueueGeneration == generation else { return }
                 self.reinitializeAudioQueue(with: self.currentBufferSize)
             }
         }
     }
 
     // MARK: - Audio Format Setup
-    private func detectHardwareSampleRate() {
-        guard let preferredDeviceID = getPreferredOutputDeviceID() else {
-            Logger.audio.warning("Preferred output device unavailable, using 44.1kHz fallback")
-            return
-        }
-        let defaultDeviceID = preferredDeviceID
-
-        // Query nominal sample rate
-        var nominalSampleRate: Float64 = 44100.0
-        var sampleRateAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyNominalSampleRate,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var sampleRateSize = UInt32(MemoryLayout<Float64>.size)
-
-        let sampleRateStatus = AudioObjectGetPropertyData(
-            defaultDeviceID,
-            &sampleRateAddress,
-            0,
-            nil,
-            &sampleRateSize,
-            &nominalSampleRate
-        )
-
-        if sampleRateStatus == noErr {
-            sampleRate = nominalSampleRate
-            Logger.audio.info("Hardware sample rate detected: \(String(format: "%.1f Hz", self.sampleRate))")
-        } else {
-            Logger.audio.warning("Sample rate query failed, using 44.1kHz fallback")
-        }
-    }
-
     private func setupAudioFormat() {
         audioFormat = AudioStreamBasicDescription(
             mSampleRate: sampleRate,
@@ -435,48 +447,9 @@ final class SoundManager {
         )
     }
 
-    // MARK: - Low-Latency Configuration
-    private func configureLowLatencyAudio() {
-        guard let preferredDeviceID = getPreferredOutputDeviceID() else {
-            Logger.audio.error("Cannot configure audio: preferred output device unavailable")
-            return
-        }
-        let defaultDeviceID = preferredDeviceID
-
-        var bufferSize: UInt32 = currentBufferSize
-        var bufferAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyBufferFrameSize,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        let bufferStatus = AudioObjectSetPropertyData(
-            defaultDeviceID,
-            &bufferAddress,
-            0,
-            nil,
-            UInt32(MemoryLayout<UInt32>.size),
-            &bufferSize
-        )
-
-        if bufferStatus == noErr {
-            let latencyMs = (Double(currentBufferSize) / sampleRate) * 1000.0
-            Logger.audio.info("Hardware buffer configured: \(self.currentBufferSize) frames (~\(String(format: "%.1f", latencyMs))ms)")
-        }
-
-        measureHardwareLatency(deviceID: defaultDeviceID)
-    }
-
     // MARK: - Audio Queue Creation
 
-    /// Creates audio queue, ensuring it's always on the main thread's runloop
     private func createAudioQueue() {
-        if !Thread.isMainThread {
-            DispatchQueue.main.sync {
-                createAudioQueueInternal()
-            }
-            return
-        }
         createAudioQueueInternal()
     }
 
@@ -488,8 +461,8 @@ final class SoundManager {
             &audioFormat,
             audioQueueCallback,
             selfPointer,
-            CFRunLoopGetMain(),
-            CFRunLoopMode.commonModes.rawValue,
+            nil, // Core Audio's internal thread, independent of UI/Metal work.
+            nil,
             0,
             &audioQueue
         )
@@ -516,6 +489,9 @@ final class SoundManager {
         // Verify allocated all buffers
         guard audioBuffers.count == numberOfBuffers else {
             Logger.audio.error("Incomplete buffer allocation: \(self.audioBuffers.count)/\(self.numberOfBuffers)")
+            AudioQueueDispose(queue, true)
+            audioQueue = nil
+            audioBuffers = []
             return
         }
 
@@ -535,8 +511,12 @@ final class SoundManager {
             let delay = min(15.0, pow(2.0, Double(currentRetry))) // capped at 15
             Logger.audio.info("Scheduling device availability retry #\(currentRetry + 1) after \(delay)s")
 
+            let retryGeneration = audioQueueGeneration
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self = self else { return }
+                self.lifecycleLock.lock()
+                defer { self.lifecycleLock.unlock() }
+                guard self.audioQueueGeneration == retryGeneration, !self.isReady else { return }
                 Logger.audio.info("Retrying audio queue initialization for device availability (attempt #\(currentRetry + 1))")
                 self.reinitializeAudioQueue(with: self.currentBufferSize, isRetry: true)
             }
@@ -563,8 +543,12 @@ final class SoundManager {
             let delay = min(15.0, pow(2.0, Double(currentRetry))) // capped at 15
             Logger.audio.info("Scheduling retry #\(currentRetry + 1) after \(delay)s")
 
+            let retryGeneration = audioQueueGeneration
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self = self else { return }
+                self.lifecycleLock.lock()
+                defer { self.lifecycleLock.unlock() }
+                guard self.audioQueueGeneration == retryGeneration, !self.isReady else { return }
                 Logger.audio.info("Retrying audio queue initialization (attempt #\(currentRetry + 1))")
                 self.reinitializeAudioQueue(with: self.currentBufferSize, isRetry: true)
             }
@@ -601,28 +585,27 @@ final class SoundManager {
         // Check for active sounds
         activeSoundsLock.lock()
 
+        #if DEBUG
+        renderedBufferCount += 1
+        renderedOnMainThread = Thread.isMainThread
+        #endif
+
         if activeSounds.isEmpty {
             // No active sounds, output silence and return early
-            let shouldClear = idleCallbackCount < numberOfBuffers
-            idleCallbackCount += 1
             activeSoundsLock.unlock()
-
-            if shouldClear {
-                memset(outputBuffer, 0, Int(framesPerBuffer * audioFormat.mBytesPerFrame))
-            }
+            memset(outputBuffer, 0, Int(framesPerBuffer * audioFormat.mBytesPerFrame))
 
             buffer.pointee.mAudioDataByteSize = framesPerBuffer * audioFormat.mBytesPerFrame
             AudioQueueEnqueueBuffer(queue, buffer, 0, nil)
             return
         }
 
-        idleCallbackCount = 0
-
         // Zero out buffer
         memset(outputBuffer, 0, Int(framesPerBuffer * audioFormat.mBytesPerFrame))
 
-        // No lock here coz float reads are atomic
+        volumeLock.lock()
         let currentVolume = volume
+        volumeLock.unlock()
 
         for sound in activeSounds {
             // Report playback started on first render
@@ -660,15 +643,8 @@ final class SoundManager {
             }
         }
 
-        let initialCount = activeSounds.count
         activeSounds.removeAll(where: { $0.isFinished })
-        let finishedCount = initialCount - activeSounds.count
-
         activeSoundsLock.unlock()
-
-        if finishedCount > 0 {
-            Logger.audio.debug("Removed \(finishedCount) finished sounds, \(self.activeSounds.count) still active")
-        }
 
         // Set buffer size and enqueue
         buffer.pointee.mAudioDataByteSize = framesPerBuffer * audioFormat.mBytesPerFrame
@@ -738,6 +714,8 @@ final class SoundManager {
     // MARK: - Public API
 
     func play(sound name: String, pitchVariation: Float = 0.0, latencyId: UUID? = nil) {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         queueStateLock.lock()
         let ready = isReady
         queueStateLock.unlock()
@@ -787,6 +765,8 @@ final class SoundManager {
         )
 
         activeSoundsLock.lock()
+        // Keep fast typing from accumulating seconds of overlapping work.
+        if activeSounds.count >= Self.maximumActiveSounds { activeSounds.removeFirst() }
         activeSounds.append(activeSound)
         activeSoundsLock.unlock()
         volumeLock.lock()
@@ -796,6 +776,8 @@ final class SoundManager {
     }
 
     func preloadSounds(for soundpack: Soundpack) {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         soundLibrary.removeAll()
 
         guard let soundDirectory = resolveSoundDirectory(for: soundpack) else {
@@ -823,6 +805,8 @@ final class SoundManager {
     /// Preloads mouse sounds from a downloaded soundpack.
     /// Config sounds keys: "left" (down/up arrays) and "right" (down/up arrays).
     func preloadMouseSoundsFromPack(for soundpack: Soundpack, config: SoundpackConfig) {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         mouseSoundLibrary.removeAll()
 
         guard let dir = resolveSoundDirectory(for: soundpack) else {
@@ -851,6 +835,8 @@ final class SoundManager {
 
     /// Plays a sound for the specified mouse button event.
     func playMouseSound(for event: MouseButtonEvent) {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         guard let sounds = mouseSoundLibrary[event], let sound = sounds.randomElement() else {
             Logger.audio.warning("Mouse sound not found for event: \(event)")
             return
@@ -898,6 +884,8 @@ final class SoundManager {
         )
 
         activeSoundsLock.lock()
+        // Keep fast typing from accumulating seconds of overlapping work.
+        if activeSounds.count >= Self.maximumActiveSounds { activeSounds.removeFirst() }
         activeSounds.append(activeSound)
         activeSoundsLock.unlock()
     }
@@ -916,17 +904,38 @@ final class SoundManager {
 
             try file.read(into: buffer)
 
-            // Convert to stereo Float32 array
-            guard let pcmData = convertToStereoFloat(buffer: buffer) else {
+            guard let converted = resampleIfNeeded(buffer),
+                  let pcmData = convertToStereoFloat(buffer: converted) else {
                 return nil
             }
 
-            return PCMSound(data: pcmData, frameCount: Int(buffer.frameLength))
+            return PCMSound(data: pcmData, frameCount: Int(converted.frameLength))
 
         } catch {
             Logger.audio.error("PCM decode failed: \(error.localizedDescription)")
             return nil
         }
+    }
+
+    // Internal for regression tests with a 44.1 kHz custom soundpack.
+    func resampleIfNeeded(_ input: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard input.format.sampleRate != sampleRate else { return input }
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate, channels: input.format.channelCount, interleaved: false),
+              let converter = AVAudioConverter(from: input.format, to: format),
+              let output = AVAudioPCMBuffer(pcmFormat: format,
+                frameCapacity: AVAudioFrameCount(ceil(Double(input.frameLength) * sampleRate / input.format.sampleRate)) + 32)
+        else { return nil }
+        var supplied = false
+        var error: NSError?
+        let status = converter.convert(to: output, error: &error) { _, state in
+            if supplied { state.pointee = .endOfStream; return nil }
+            supplied = true
+            state.pointee = .haveData
+            return input
+        }
+        guard status != .error, error == nil, output.frameLength > 0 else { return nil }
+        return output
     }
 
     private func convertToStereoFloat(buffer: AVAudioPCMBuffer) -> [Float]? {

@@ -8,9 +8,84 @@
 import Testing
 import Foundation
 import AppKit
+import AVFoundation
 @testable import Thock_maimai
 
 @Suite(.serialized) struct ThockTests {
+
+    // Simulates a busy UI/render pass without blocking the Core Audio thread.
+    private func blockUI(for seconds: TimeInterval) { Thread.sleep(forTimeInterval: seconds) }
+
+    @Test @MainActor func audioContinuesWhileMainThreadIsBusy() async throws {
+        let mixed = try #require(SoundpackDatabase().getSoundpack(by:
+            UUID(uuidString: "354BD030-0A95-57B5-ABE4-5E1AB05CADEC")!))
+        let manager = SoundManager.shared
+        manager.preloadSounds(for: mixed)
+        manager.play(sound: "touch.wav")
+        try await Task.sleep(for: .milliseconds(100))
+        let before = manager.audioDiagnostics()
+        blockUI(for: 0.3)
+        let after = manager.audioDiagnostics()
+        print("Audio UI-stall regression: buffers=\(after.buffers-before.buffers), sourceFrames=\(after.sourceFramesConsumed-before.sourceFramesConsumed), callbackOnMain=\(after.callbackOnMainThread)")
+        #expect(after.buffers - before.buffers > 20)
+        #expect(after.sourceFramesConsumed - before.sourceFramesConsumed > 8_000)
+        #expect(!after.callbackOnMainThread)
+    }
+
+    @Test @MainActor func rapidAudioIsBoundedAndResumesAfterIdle() async throws {
+        let manager = SoundManager.shared
+        let mixed = try #require(SoundpackDatabase().getSoundpack(by:
+            UUID(uuidString: "354BD030-0A95-57B5-ABE4-5E1AB05CADEC")!))
+        manager.preloadSounds(for: mixed)
+        let oldVolume = manager.setTestVolume(0)
+        defer { _ = manager.setTestVolume(oldVolume) }
+        for _ in 0..<500 { manager.play(sound: "tap.wav") }
+        #expect(manager.audioDiagnostics().activeVoices <= SoundManager.maximumActiveSounds)
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(manager.audioDiagnostics().activeVoices == 0)
+        for _ in 0..<3 {
+            manager.stopIfIdleForTesting()
+            #expect(!manager.audioDiagnostics().running)
+            let before = manager.audioDiagnostics().buffers
+            manager.play(sound: "answer.wav")
+            try await Task.sleep(for: .milliseconds(500))
+            #expect(manager.audioDiagnostics().running)
+            #expect(manager.audioDiagnostics().buffers > before + 20)
+            #expect(manager.audioDiagnostics().activeVoices == 0)
+        }
+    }
+
+    @Test @MainActor func queueRebuildDoesNotRacePlayback() async throws {
+        let manager = SoundManager.shared
+        let oldVolume = manager.setTestVolume(0)
+        defer { _ = manager.setTestVolume(oldVolume) }
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                DispatchQueue.concurrentPerform(iterations: 16) { index in
+                    if index % 8 == 0 { manager.reinitializeAfterWake() }
+                    else { manager.play(sound: "tap.wav") }
+                }
+                continuation.resume()
+            }
+        }
+        let before = manager.audioDiagnostics().buffers
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(manager.audioDiagnostics().ready)
+        #expect(manager.audioDiagnostics().buffers > before + 10)
+    }
+
+    @Test func customPackSampleRatePreservesDuration() throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2))
+        let input = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4410))
+        input.frameLength = 4410
+        for channel in 0..<2 {
+            for frame in 0..<4410 { input.floatChannelData![channel][frame] = sin(Float(frame) * 0.1) * 0.1 }
+        }
+        let converted = try #require(SoundManager.shared.resampleIfNeeded(input))
+        #expect(converted.format.sampleRate == 48000)
+        #expect(abs(Int(converted.frameLength) - 4800) <= 1)
+        #expect(converted.floatChannelData![0][100].isFinite)
+    }
 
     @Test @MainActor func hdrDefaultsOffOnFreshPreferences() {
         let saved=UserDefaults.standard.object(forKey:"maimaiHDREnabled")
