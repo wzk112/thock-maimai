@@ -10,7 +10,7 @@
 template<class T> using Com=Microsoft::WRL::ComPtr<T>;
 void hrCheck(HRESULT hr,const char* operation);
 struct alignas(16) Parameters {float geometry[4]{},tint[4]{},frame[4]{},options[4]{};};
-struct FrameProof {float peak=0,cornerAlpha=0;size_t visible=0;};
+struct FrameProof {float peak=0,cornerAlpha=0;double alphaCenterX=0;size_t visible=0;};
 class Renderer {
     Com<ID3D11Device> device; Com<ID3D11DeviceContext> context;
     Com<ID3D11VertexShader> spriteVS,fullVS;

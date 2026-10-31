@@ -99,8 +99,8 @@ void Renderer::scene(ID3D11RenderTargetView* target,int width,int height,const S
             distance+=std::min(p.speed,std::max(0.,limit))*dt;}
         auto color=gradient(e["colorHi"],t),low=gradient(e["colorLo"],t);
         if(e["colorRandom"].get<bool>())for(int c=0;c<4;++c)color[c]=float(lerp(low[c],color[c],p.random));
-        Parameters v{};v.geometry[0]=float(width*.5+std::cos(p.angle)*distance*scale);
-        v.geometry[1]=float(height*.5-std::sin(p.angle)*distance*scale);
+        Parameters v{};v.geometry[0]=float(width*b.origin[0]+std::cos(p.angle)*distance*scale);
+        v.geometry[1]=float(height*b.origin[1]-std::sin(p.angle)*distance*scale);
         v.geometry[2]=float(p.diameter*std::max(0.,curve(e["sizeCurve"],t,p.random))*scale);v.geometry[3]=float(-p.rotation-p.spin*age);
         std::copy(color.begin(),color.end(),v.tint);v.frame[0]=float(width);v.frame[1]=float(height);v.frame[2]=float(std::fmod(now,1000.));v.frame[3]=e["exposure"].get<float>();v.options[0]=float(mat);update(v);
         ID3D11ShaderResourceView* views[2]{};for(size_t i=0;i<e["textures"].size();++i)views[i]=textures.at(e["textures"][i].get<std::string>()).Get();
@@ -152,14 +152,16 @@ FrameProof Renderer::proof(const Simulation& sim,double now,float headroom,const
     scene(ir.Get(),w,h,sim,now);finish(orr.Get(),srv.Get(),w,h,headroom,1);
     d.BindFlags=0;d.Usage=D3D11_USAGE_STAGING;d.CPUAccessFlags=D3D11_CPU_ACCESS_READ;hrCheck(device->CreateTexture2D(&d,nullptr,&staging),"Proof readback");context->CopyResource(staging.Get(),out.Get());
     D3D11_MAPPED_SUBRESOURCE mapped{};hrCheck(context->Map(staging.Get(),0,D3D11_MAP_READ,0,&mapped),"Proof map");
-    FrameProof result;std::vector<uint8_t> pixels(size_t(w)*h*4);
+    FrameProof result;double alphaMass=0;std::vector<uint8_t> pixels(size_t(w)*h*4);
     for(UINT y=0;y<h;++y){auto row=reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(mapped.pData)+y*mapped.RowPitch);
         for(UINT x=0;x<w;++x){float a=DirectX::PackedVector::XMConvertHalfToFloat(row[x*4+3]);if(x==0&&y==0)result.cornerAlpha=a;if(a>.05)++result.visible;
+            alphaMass+=a;result.alphaCenterX+=a*(double(x)/w);
             for(int c=0;c<3;++c){float v=DirectX::PackedVector::XMConvertHalfToFloat(row[x*4+c]);if(std::isfinite(v))result.peak=std::max(result.peak,v);
                 float linear=std::clamp(a>0?v/a:0.f,0.f,1.f);float srgb=linear<=.0031308f?linear*12.92f:1.055f*std::pow(linear,1/2.4f)-.055f;
                 pixels[(size_t(y)*w+x)*4+(2-c)]=uint8_t(std::clamp(srgb*255,0.f,255.f));}
             pixels[(size_t(y)*w+x)*4+3]=uint8_t(std::clamp(a*255,0.f,255.f));}}
     context->Unmap(staging.Get(),0);
+    if(alphaMass>0)result.alphaCenterX/=alphaMass;
     if(!png.empty()){
         Com<IWICImagingFactory> wic;Com<IWICStream> stream;Com<IWICBitmapEncoder> encoder;Com<IWICBitmapFrameEncode> frame;
         hrCheck(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&wic)),"Proof WIC");hrCheck(wic->CreateStream(&stream),"Proof stream");hrCheck(stream->InitializeFromFilename(png.c_str(),GENERIC_WRITE),"Proof PNG");

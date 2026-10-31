@@ -13,6 +13,68 @@ import AVFoundation
 
 @Suite(.serialized) struct ThockTests {
 
+    @Test @MainActor func randomPositionDefaultsOffAndPersists() {
+        let key = "maimaiRandomPosition", old = UserDefaults.standard.object(forKey:"maimaiRandomPosition")
+        defer {
+            if let old { UserDefaults.standard.set(old,forKey:key) }
+            else { UserDefaults.standard.removeObject(forKey:key) }
+        }
+        UserDefaults.standard.removeObject(forKey:key)
+        #expect(!MaimaiFireworks.shared.randomPosition)
+        MaimaiFireworks.shared.randomPosition = true
+        #expect(UserDefaults.standard.bool(forKey:key))
+        MaimaiFireworks.shared.randomPosition = false
+        #expect(!UserDefaults.standard.bool(forKey:key))
+    }
+
+    @Test @MainActor func randomBurstsStayInScreenAndDoNotMovePreviousBursts() throws {
+        for size in [CGSize(width:1920,height:1080),CGSize(width:800,height:1200)] {
+            let scene = MaimaiScene(size:size)
+            scene.burst()
+            let centered = try #require(scene.children.last)
+            #expect(centered.position == CGPoint(x:size.width/2,y:size.height/2))
+            var origins = Set<String>()
+            for _ in 0..<24 {
+                let previous = scene.children.last!, position = previous.position
+                scene.burst(randomPosition:true)
+                #expect(previous.position == position)
+                let point = try #require(scene.children.last?.position)
+                #expect((size.width*0.2...size.width*0.8).contains(point.x))
+                #expect((size.height*0.2...size.height*0.8).contains(point.y))
+                #expect(scene.children.count <= 6)
+                origins.insert("\(point.x),\(point.y)")
+            }
+            #expect(origins.count > 1)
+            scene.burst(randomPosition:false)
+            #expect(scene.children.last?.position == CGPoint(x:size.width/2,y:size.height/2))
+        }
+    }
+
+    @Test @MainActor func randomPositionRendersAndReturnsToCenter() async throws {
+        let fx = MaimaiFireworks.shared
+        let oldRandom=fx.randomPosition, oldEnabled=fx.enabled, oldAll=fx.allDisplays, oldHDR=fx.hdrEnabled
+        defer { fx.clear(); fx.randomPosition=oldRandom; fx.enabled=oldEnabled; fx.allDisplays=oldAll; fx.hdrEnabled=oldHDR }
+        fx.enabled=true; fx.allDisplays=false; fx.hdrEnabled=false; fx.randomPosition=true
+        var evidence: [[String:Double]] = []
+        for index in 0..<2 {
+            fx.clear(); fx.show()
+            let point = try #require(fx.activeBurstPositions.last), size = try #require(fx.activeSceneSize)
+            try await Task.sleep(for:.milliseconds(180))
+            #expect(fx.activeBurstPositions.last == point)
+            #expect((0.2...0.8).contains(point.x/size.width) && (0.2...0.8).contains(point.y/size.height))
+            let image = try #require(fx.renderedEffectFrame())
+            let bitmap = NSBitmapImageRep(cgImage:image)
+            try bitmap.representation(using:.png,properties:[:])?.write(to:
+                FileManager.default.temporaryDirectory.appendingPathComponent("maimai-random-position-\(index).png"))
+            evidence.append(["x":point.x/size.width,"y":point.y/size.height])
+        }
+        fx.randomPosition=false; fx.show()
+        let size = try #require(fx.activeSceneSize)
+        #expect(fx.activeBurstPositions.last == CGPoint(x:size.width/2,y:size.height/2))
+        try JSONSerialization.data(withJSONObject:evidence,options:.prettyPrinted).write(to:
+            FileManager.default.temporaryDirectory.appendingPathComponent("maimai-random-position-check.json"))
+    }
+
     // Simulates a busy UI/render pass without blocking the Core Audio thread.
     private func blockUI(for seconds: TimeInterval) { Thread.sleep(forTimeInterval: seconds) }
 

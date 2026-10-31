@@ -136,6 +136,9 @@ class MenuBarController {
         let enabled = NSMenuItem(title: "启用烟花特效", action: #selector(toggleMaimai), keyEquivalent: "")
         enabled.target = self; enabled.state = MaimaiFireworks.shared.enabled ? .on : .off
         sub.addItem(enabled)
+        let random = NSMenuItem(title: "随机位置烟花", action: #selector(toggleMaimaiRandomPosition), keyEquivalent: "")
+        random.target = self; random.state = MaimaiFireworks.shared.randomPosition ? .on : .off
+        sub.addItem(random)
         let hdr = NSMenuItem(title: "HDR 峰值高光", action: #selector(toggleMaimaiHDR), keyEquivalent: "")
         hdr.target = self; hdr.state = MaimaiFireworks.shared.hdrEnabled ? .on : .off
         sub.addItem(hdr)
@@ -148,6 +151,7 @@ class MenuBarController {
     }
     @objc private func toggleMaimai() { MaimaiFireworks.shared.enabled.toggle(); setupMenu() }
     @objc private func toggleMaimaiHDR() { MaimaiFireworks.shared.hdrEnabled.toggle(); setupMenu() }
+    @objc private func toggleMaimaiRandomPosition() { MaimaiFireworks.shared.randomPosition.toggle(); setupMenu() }
     @objc private func toggleMaimaiDisplays() { MaimaiFireworks.shared.allDisplays.toggle(); setupMenu() }
     @objc private func openMaimaiPreview() { MaimaiFireworks.shared.openPreview() }
 
@@ -504,6 +508,8 @@ class MenuBarController {
     // MARK: - StatusBarItem Click Handlers
 
     private func handleLeftClick(sender: NSStatusBarButton) {
+        // Preview-window toggles also write preferences; read them each time.
+        setupMenu()
         statusBarItem.menu = self.menu
         sender.performClick(nil)
         statusBarItem.menu = nil

@@ -98,11 +98,18 @@ final class MaimaiEffectData {
 final class MaimaiScene: SKScene {
     private var bursts: [SKNode] = []
     var pixelScale: CGFloat = 2
-    func burst() {
+    func burst(randomPosition: Bool = false) {
         // Bound work during fast typing; keep the newest six complete bursts.
         bursts.removeAll { $0.parent == nil }
         if bursts.count >= 6 { bursts.removeFirst().removeFromParent() }
-        let root = SKNode(); root.position=CGPoint(x:size.width/2,y:size.height/2)
+        let root = SKNode()
+        // Pick once per burst: all particles share a stable origin while they
+        // animate. Work in scene coordinates so Retina and secondary screens
+        // need no conversion from global desktop coordinates.
+        let origin = randomPosition
+            ? CGPoint(x:CGFloat.random(in:0.2...0.8),y:CGFloat.random(in:0.2...0.8))
+            : CGPoint(x:0.5,y:0.5)
+        root.position=CGPoint(x:size.width*origin.x,y:size.height*origin.y)
         // Preserve the circular effect; scale the original 1100-unit diameter to the display.
         root.setScale(max(size.width,size.height)/1000)
         addChild(root); bursts.append(root)
@@ -172,6 +179,14 @@ final class MaimaiFireworks {
         get { UserDefaults.standard.bool(forKey:"maimaiAllDisplays") }
         set { UserDefaults.standard.set(newValue,forKey:"maimaiAllDisplays"); clear() }
     }
+    var randomPosition: Bool {
+        get { UserDefaults.standard.bool(forKey:"maimaiRandomPosition") }
+        set { UserDefaults.standard.set(newValue,forKey:"maimaiRandomPosition") }
+    }
+    #if DEBUG
+    var activeBurstPositions: [CGPoint] { windows.first?.2.children.map(\.position) ?? [] }
+    var activeSceneSize: CGSize? { windows.first?.2.size }
+    #endif
     var hdrEnabled: Bool {
         get { UserDefaults.standard.object(forKey:"maimaiHDREnabled") as? Bool ?? false }
         set {
@@ -233,7 +248,10 @@ final class MaimaiFireworks {
             }
         }
         hideWork?.cancel()
-        for (window,view,scene) in windows { view.isPaused=false; window.orderFrontRegardless(); scene.burst() }
+        for (window,view,scene) in windows {
+            view.isPaused=false; window.orderFrontRegardless()
+            scene.burst(randomPosition:randomPosition)
+        }
         triggerCount += 1
         Logger.audio.info("Maimai fireworks burst \(self.triggerCount)")
         let work=DispatchWorkItem { [weak self] in
@@ -265,7 +283,7 @@ final class MaimaiFireworks {
     private var previewSound: NSSound?
     func openPreview() {
         if previewWindow == nil {
-            let w=NSWindow(contentRect:NSRect(x:0,y:0,width:460,height:385),styleMask:[.titled,.closable],backing:.buffered,defer:false)
+            let w=NSWindow(contentRect:NSRect(x:0,y:0,width:460,height:445),styleMask:[.titled,.closable],backing:.buffered,defer:false)
             w.title="Thock maimai · 烟花"; w.isReleasedWhenClosed=false
             w.contentView=NSHostingView(rootView:MaimaiPreviewView()); w.center(); previewWindow=w
         }
@@ -275,12 +293,16 @@ final class MaimaiFireworks {
 
 private struct MaimaiPreviewView: View {
     @AppStorage("maimaiHDREnabled") private var hdrEnabled=false
+    @AppStorage("maimaiRandomPosition") private var randomPosition=false
     var body: some View {
         VStack(alignment:.leading,spacing:18) {
             Text("maimai 烟花").font(.system(size:30,weight:.bold,design:.rounded))
             Text("在桌面上绽放").font(.title3).foregroundStyle(.secondary)
             Button("播放全屏烟花与音效") { MaimaiFireworks.shared.preview() }
                 .buttonStyle(.borderedProminent).controlSize(.large)
+            Toggle("随机位置烟花",isOn:$randomPosition)
+            Text("每次触发随机选择位置；关闭后在屏幕中央绽放。")
+                .font(.system(size:12)).foregroundStyle(.secondary)
             Toggle("HDR 峰值高光",isOn:$hdrEnabled)
                 .onChange(of:hdrEnabled) { value in MaimaiFireworks.shared.hdrEnabled=value }
             Text("亮芯、星光与光环使用屏幕当前可用的 HDR 峰值。")

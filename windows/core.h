@@ -73,14 +73,15 @@ inline Sound route(unsigned key,int pack) {
     return Sound::Tap;
 }
 struct Settings {
-    bool enabled=true, fireworks=true, hdr=false, allDisplays=false;
+    bool enabled=true, fireworks=true, hdr=false, allDisplays=false, randomPosition=false;
     int pack=0; float volume=.35f;
     std::string assetPath;
     Json json() const {return {{"enabled",enabled},{"fireworks",fireworks},{"hdr",hdr},{"allDisplays",allDisplays},
-        {"pack",pack},{"volume",volume},{"assetPath",assetPath}};}
+        {"randomPosition",randomPosition},{"pack",pack},{"volume",volume},{"assetPath",assetPath}};}
     static Settings parse(const Json& j) {
         Settings s; s.enabled=j.value("enabled",true); s.fireworks=j.value("fireworks",true);
         s.hdr=j.value("hdr",false); s.allDisplays=j.value("allDisplays",false);
+        s.randomPosition=j.value("randomPosition",false);
         s.pack=std::clamp(j.value("pack",0),0,5); s.volume=std::clamp(j.value("volume",.35f),0.f,1.f);
         s.assetPath=j.value("assetPath",std::string{}); return s;
     }
@@ -88,7 +89,12 @@ struct Settings {
 struct Particle {
     size_t emitter=0; double birth=0,life=1,diameter=0,angle=0,rotation=0,radius=0,speed=0,spin=0,random=0;
 };
-struct Burst { double start=0; std::vector<Particle> particles; };
+struct Burst {
+    double start=0;
+    // Stable normalized screen coordinates, sampled once per trigger.
+    std::array<double,2> origin{.5,.5};
+    std::vector<Particle> particles;
+};
 class Simulation {
     std::mt19937 rng{std::random_device{}()};
     double random() { return std::generate_canonical<double,32>(rng); }
@@ -122,10 +128,11 @@ public:
         if(total>1000) throw std::runtime_error("Particle limit exceeded");
         emitters=std::move(list); bursts.clear();
     }
-    void burst(double now) {
+    void burst(double now,bool randomPosition=false) {
         expire(now);
         if(bursts.size()>=6) bursts.erase(bursts.begin());
         Burst b; b.start=now;
+        if(randomPosition)b.origin={.2+.6*random(),.2+.6*random()};
         for(size_t i=0;i<emitters.size();++i) {
             auto& e=emitters[i]; std::vector<double> births;
             for(auto& v:e["bursts"]) for(int j=0;j<v[1].get<int>();++j)births.push_back(v[0]);

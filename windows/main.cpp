@@ -6,7 +6,7 @@
 #include <chrono>
 #include <iostream>
 static constexpr UINT TRAY=WM_APP+1;
-static constexpr int ENABLE=101,FIREWORK=102,HDR=103,ALL=104,PACK=105,VOLUME=106,PREVIEW=107,IMPORT=108,QUIT=109,RESET=110,LICENSES=111;
+static constexpr int ENABLE=101,FIREWORK=102,HDR=103,ALL=104,PACK=105,VOLUME=106,PREVIEW=107,IMPORT=108,QUIT=109,RESET=110,LICENSES=111,RANDOM_POSITION=112;
 static double clockSeconds(){return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();}
 static std::wstring wide(const std::string& s){if(s.empty())return {};int n=MultiByteToWideChar(CP_UTF8,0,s.data(),int(s.size()),nullptr,0);std::wstring r(n,0);MultiByteToWideChar(CP_UTF8,0,s.data(),int(s.size()),r.data(),n);return r;}
 static std::wstring text(HWND w){int n=GetWindowTextLength(w);std::wstring result(n+1,0);GetWindowText(w,result.data(),n+1);result.resize(n);return result;}
@@ -42,13 +42,14 @@ class Application {
         setStatus(audio->available?L"已就绪 · 混合模式按 Tab 播放烟花":L"未找到音频设备 · 烟花仍可使用，连接设备后点击预览重试");
     }
     void controls(){
-        auto add=[&](const wchar_t* cls,const wchar_t* label,DWORD style,int x,int y,int w,int h,int id){HWND c=CreateWindowEx(0,cls,label,WS_CHILD|WS_VISIBLE|style,x,y,w,h,window,reinterpret_cast<HMENU>(INT_PTR(id)),instance,nullptr);controlLayout.push_back({c,{x,y,x+w,y+h}});return c;};
+        auto add=[&](const wchar_t* cls,const wchar_t* label,DWORD style,int x,int y,int w,int h,int id){if(y>=170)y+=36;HWND c=CreateWindowEx(0,cls,label,WS_CHILD|WS_VISIBLE|style,x,y,w,h,window,reinterpret_cast<HMENU>(INT_PTR(id)),instance,nullptr);controlLayout.push_back({c,{x,y,x+w,y+h}});return c;};
         add(L"STATIC",L"Thock maimai",0,24,20,410,28,0);
         add(L"STATIC",L"键盘音效与全屏烟花 · 单独运行即可",0,24,54,420,24,0);
         add(L"BUTTON",L"启用键盘音效",BS_AUTOCHECKBOX|WS_TABSTOP,24,94,225,26,ENABLE);
         add(L"BUTTON",L"启用烟花",BS_AUTOCHECKBOX|WS_TABSTOP,260,94,190,26,FIREWORK);
         add(L"BUTTON",L"HDR 高光（默认关闭）",BS_AUTOCHECKBOX|WS_TABSTOP,24,130,240,26,HDR);
         add(L"BUTTON",L"所有显示器",BS_AUTOCHECKBOX|WS_TABSTOP,280,130,170,26,ALL);
+        add(L"BUTTON",L"随机位置烟花",BS_AUTOCHECKBOX|WS_TABSTOP,24,166,420,26,RANDOM_POSITION);
         add(L"STATIC",L"音效模式",0,24,176,105,24,0);
         auto combo=add(WC_COMBOBOX,L"",CBS_DROPDOWNLIST|WS_TABSTOP,130,170,310,250,PACK);
         for(auto label:{L"混合 · Tab 烟花",L"正解音",L"Tap",L"Touch",L"绝赞",L"烟花 Touch"})SendMessage(combo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(label));
@@ -60,7 +61,7 @@ class Application {
         add(L"BUTTON",L"许可与开源",BS_PUSHBUTTON|WS_TABSTOP,245,322,205,32,LICENSES);
         add(L"STATIC",L"混合：普通键 Tap，空格 Touch，回车绝赞，\n退格 / Esc / Delete 正解音，Tab 烟花。\n关闭窗口后留在托盘；右键托盘可退出。",0,24,372,440,72,0);
         status=add(L"STATIC",L"加载中…",0,24,454,440,55,0);
-        for(auto [id,value]:{std::pair{ENABLE,settings.enabled},{FIREWORK,settings.fireworks},{HDR,settings.hdr},{ALL,settings.allDisplays}})CheckDlgButton(window,id,value?BST_CHECKED:BST_UNCHECKED);
+        for(auto [id,value]:{std::pair{ENABLE,settings.enabled},{FIREWORK,settings.fireworks},{HDR,settings.hdr},{ALL,settings.allDisplays},{RANDOM_POSITION,settings.randomPosition}})CheckDlgButton(window,id,value?BST_CHECKED:BST_UNCHECKED);
         SendMessage(combo,CB_SETCURSEL,settings.pack,0);
     }
     void scaleControls(UINT dpi){
@@ -91,7 +92,7 @@ class Application {
         else {POINT p{};GetCursorPos(&p);monitors.push_back(MonitorFromPoint(p,MONITOR_DEFAULTTONEAREST));}
         bool match=overlays.size()==monitors.size();for(size_t i=0;match&&i<monitors.size();++i)match=overlays[i]->monitor==monitors[i];
         if(!match){stopEffects();for(auto h:monitors)overlays.push_back(renderer->createOverlay(instance,h));}
-        sim.burst(clockSeconds());++fireworkCount;SetTimer(window,1,16,nullptr);
+        sim.burst(clockSeconds(),settings.randomPosition);++fireworkCount;SetTimer(window,1,16,nullptr);
     }
     void trayMenu(){HMENU menu=CreatePopupMenu();AppendMenu(menu,MF_STRING,1,L"打开设置");AppendMenu(menu,MF_STRING|(settings.enabled?MF_CHECKED:0),2,L"启用");AppendMenu(menu,MF_SEPARATOR,0,nullptr);AppendMenu(menu,MF_STRING,3,L"退出");
         POINT p{};GetCursorPos(&p);SetForegroundWindow(window);int id=TrackPopupMenu(menu,TPM_RETURNCMD|TPM_NONOTIFY,p.x,p.y,0,window,nullptr);DestroyMenu(menu);
@@ -114,6 +115,7 @@ class Application {
         case WM_COMMAND:{int id=LOWORD(a);
             if(id==ENABLE||id==FIREWORK||id==HDR||id==ALL){settings.enabled=IsDlgButtonChecked(window,ENABLE)==BST_CHECKED;settings.fireworks=IsDlgButtonChecked(window,FIREWORK)==BST_CHECKED;
                 settings.hdr=IsDlgButtonChecked(window,HDR)==BST_CHECKED;settings.allDisplays=IsDlgButtonChecked(window,ALL)==BST_CHECKED;stopEffects();if(!settings.enabled&&audio)audio->stop();save();}
+            if(id==RANDOM_POSITION){settings.randomPosition=IsDlgButtonChecked(window,RANDOM_POSITION)==BST_CHECKED;save();}
             if(id==PACK&&HIWORD(a)==CBN_SELCHANGE){settings.pack=int(SendDlgItemMessage(window,PACK,CB_GETCURSEL,0,0));stopEffects();if(audio)audio->stop();save();}
             if(id==PREVIEW){trigger(Sound::Firework,true);if(!settings.fireworks)setStatus(L"烟花开关已关闭，当前只播放音效");}
             if(id==IMPORT)selectAssets();
@@ -139,9 +141,9 @@ public:
         if(testing)config=root/"test-state"/"settings.json";
         else if(fs::exists(config))try{settings=Settings::parse(Json::parse(readText(config)));}catch(...){settings=Settings{};}
         WNDCLASS wc{};wc.hInstance=h;wc.lpfnWndProc=procedure;wc.lpszClassName=L"FireflyMaimaiSettings";wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);wc.hIcon=LoadIcon(nullptr,IDI_APPLICATION);RegisterClass(&wc);
-        HWND w=CreateWindow(wc.lpszClassName,L"Thock maimai",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,500,530,nullptr,nullptr,h,this);
+        HWND w=CreateWindow(wc.lpszClassName,L"Thock maimai",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,500,566,nullptr,nullptr,h,this);
         if(!w)throw std::runtime_error("Settings window failed");controls();UINT dpi=GetDpiForWindow(window);scaleControls(dpi);
-        RECT desired{0,0,MulDiv(480,dpi,96),MulDiv(530,dpi,96)};
+        RECT desired{0,0,MulDiv(480,dpi,96),MulDiv(566,dpi,96)};
         AdjustWindowRectExForDpi(&desired,DWORD(GetWindowLongPtr(window,GWL_STYLE)),FALSE,0,dpi);
         SetWindowPos(window,nullptr,0,0,desired.right-desired.left,desired.bottom-desired.top,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
         tray.cbSize=sizeof(tray);tray.hWnd=window;tray.uID=1;tray.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;tray.uCallbackMessage=TRAY;tray.hIcon=wc.hIcon;wcscpy_s(tray.szTip,L"Thock maimai");Shell_NotifyIcon(NIM_ADD,&tray);
@@ -197,6 +199,16 @@ void Application::integrationCheck(const fs::path& output) {
     size_t before=fireworkCount;
     input(VK_TAB,false);input(VK_TAB,false);input(VK_TAB,false);input(VK_TAB,true);
     check("heldKeyDeduplicated",fireworkCount==before+1);
+    check("randomPositionDefaultsOff",!settings.randomPosition && sim.bursts.back().origin==std::array<double,2>{.5,.5});
+    toggle(RANDOM_POSITION,true);tap(VK_TAB);
+    auto firstOrigin=sim.bursts.back().origin;
+    check("randomPositionInsideScreen",firstOrigin[0]>=.2&&firstOrigin[0]<=.8&&firstOrigin[1]>=.2&&firstOrigin[1]<=.8);
+    tap(VK_TAB);
+    check("randomPositionChangesPerTrigger",sim.bursts.back().origin!=firstOrigin);
+    check("randomPositionStableDuringAnimation",sim.bursts[sim.bursts.size()-2].origin==firstOrigin);
+    check("randomPositionSaved",Settings::parse(Json::parse(readText(config))).randomPosition);
+    toggle(RANDOM_POSITION,false);tap(VK_TAB);
+    check("randomPositionOffReturnsToCenter",sim.bursts.back().origin==std::array<double,2>{.5,.5});
     for(auto [key,sound]:{std::pair<WORD,Sound>{VK_SPACE,Sound::Touch},{VK_RETURN,Sound::BreakCritical},{VK_BACK,Sound::Answer},{VK_ESCAPE,Sound::Answer}}){
         size_t previous=soundRequests[size_t(sound)];tap(key);check(("route_"+std::to_string(key)).c_str(),soundRequests[size_t(sound)]==previous+1);
     }
@@ -233,6 +245,12 @@ static int selfTest(HINSTANCE instance,const fs::path& root,const fs::path& fold
     auto sdr=renderer.proof(sim,.20,1,root/"preview-sdr.png"),hdr=renderer.proof(sim,.20,16,{});
     Json proof={{"sdrPeak",sdr.peak},{"hdrPeak",hdr.peak},{"transparentCorner",sdr.cornerAlpha},{"visiblePixels",sdr.visible},{"defaultHdr",Settings{}.hdr}};
     if(sdr.peak>1.001||hdr.peak<1.1||sdr.cornerAlpha>.001||sdr.visible<100)throw std::runtime_error("Pixel validation failed: "+proof.dump());
+    sim.bursts.back().origin={.25,.5};auto left=renderer.proof(sim,.20,1,root/"preview-position-left.png");
+    sim.bursts.back().origin={.75,.5};auto right=renderer.proof(sim,.20,1,root/"preview-position-right.png");
+    proof["leftPositionAlphaCenterX"]=left.alphaCenterX;proof["rightPositionAlphaCenterX"]=right.alphaCenterX;
+    proof["positionMovesRenderedPixels"]=right.alphaCenterX-left.alphaCenterX>.05;
+    if(!proof["positionMovesRenderedPixels"].get<bool>())throw std::runtime_error("Burst origin did not move rendered pixels");
+    sim.bursts.back().origin={.5,.5};
     Audio audio(assets);Json samples=Json::array();
     for(size_t index=0;index<audio.waves.size();++index){auto& wave=audio.waves[index];
         if(wave.pcm.empty())throw std::runtime_error("Empty audio");
