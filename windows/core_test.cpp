@@ -10,6 +10,8 @@ int main() {
     check(Settings::parse({{"volume",-2}}).volume==0);
     check(route(9,0)==Sound::Firework); check(route(32,0)==Sound::Touch);
     check(route(13,0)==Sound::BreakCritical); check(route(8,0)==Sound::Answer);
+    check(usableKeyboardKey('A',0x1E));check(!usableKeyboardKey(0,0x1E));
+    check(!usableKeyboardKey(0xFF,0x1E));check(!usableKeyboardKey('A',0xFF));
     for(unsigned k=0;k<256;++k) {check(route(k,2)==Sound::Tap);check(route(k,5)==Sound::Firework);}
     check(std::abs(hermite(Json::parse("[[0,1,-2,-2],[1,0,0,0]]"),.5)-.25)<1e-9);
     bool rejected=false;try{safeFile("assets","../secret");}catch(...){rejected=true;}check(rejected);

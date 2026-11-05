@@ -107,7 +107,8 @@ class Application {
             if(GetRawInputData(reinterpret_cast<HRAWINPUT>(b),RID_INPUT,bytes.data(),&size,sizeof(RAWINPUTHEADER))!=size)break;
             auto* input=reinterpret_cast<RAWINPUT*>(bytes.data());if(input->header.dwType!=RIM_TYPEKEYBOARD)break;
             if(testing)++inputEvents;
-            unsigned key=input->data.keyboard.VKey;if(key>=256)break;bool up=(input->data.keyboard.Flags&RI_KEY_BREAK)!=0;
+            auto& keyboard=input->data.keyboard;if(!usableKeyboardKey(keyboard.VKey,keyboard.MakeCode))break;
+            unsigned key=keyboard.VKey;bool up=(keyboard.Flags&RI_KEY_BREAK)!=0;
             if(up){held[key]=false;break;}if(held[key])break;held[key]=true;
             if(key==VK_SHIFT||key==VK_CONTROL||key==VK_MENU||key==VK_LWIN||key==VK_RWIN)break;
             // Do not echo keyboard navigation in this app's own settings window.
@@ -174,10 +175,11 @@ void Application::integrationCheck(const fs::path& output) {
             Sleep(2);
         }while(clockSeconds()<end);
     };
-    auto input=[&](WORD key,bool up){INPUT event{};event.type=INPUT_KEYBOARD;
-        event.ki.wScan=WORD(MapVirtualKey(key,MAPVK_VK_TO_VSC));event.ki.dwFlags=KEYEVENTF_SCANCODE|(up?KEYEVENTF_KEYUP:0);
+    auto input=[&](WORD key,bool up,bool extended=false){INPUT event{};event.type=INPUT_KEYBOARD;
+        event.ki.wScan=WORD(MapVirtualKey(key,MAPVK_VK_TO_VSC));event.ki.dwFlags=KEYEVENTF_SCANCODE|(extended?KEYEVENTF_EXTENDEDKEY:0)|(up?KEYEVENTF_KEYUP:0);
         if(SendInput(1,&event,sizeof(event))!=1)throw std::runtime_error("SendInput failed");pump(.12);};
     auto tap=[&](WORD key){input(key,false);input(key,true);};
+    auto tapExtended=[&](WORD key){input(key,false,true);input(key,true,true);};
     auto toggle=[&](int id,bool on){CheckDlgButton(window,id,on?BST_CHECKED:BST_UNCHECKED);SendMessage(window,WM_COMMAND,MAKEWPARAM(id,BN_CLICKED),0);};
     auto pack=[&](int index){SendDlgItemMessage(window,PACK,CB_SETCURSEL,index,0);SendMessage(window,WM_COMMAND,MAKEWPARAM(PACK,CBN_SELCHANGE),0);};
     auto volume=[&](int value){SendDlgItemMessage(window,VOLUME,TBM_SETPOS,TRUE,value);SendMessage(window,WM_HSCROLL,0,0);};
@@ -191,6 +193,10 @@ void Application::integrationCheck(const fs::path& output) {
     ShowWindow(target,SW_SHOW);SetForegroundWindow(target);SetFocus(target);pump(.2);
     check("foregroundTarget",GetForegroundWindow()==target);
     tap('A');check("ordinaryKeyRoutesTap",soundRequests[size_t(Sound::Tap)]==1 && fireworkCount==0);
+    for(auto key:{WORD(VK_LEFT),WORD(VK_UP),WORD(VK_RIGHT),WORD(VK_DOWN),WORD(VK_INSERT)}){
+        size_t previous=soundRequests[size_t(Sound::Tap)];tapExtended(key);
+        check(("extended_"+std::to_string(key)).c_str(),soundRequests[size_t(Sound::Tap)]==previous+1);
+    }
     tap(VK_TAB);pump(.15);
     check("tabTriggersFireworks",fireworkCount==1);
     check("overlayRendered",drawnFrames>0 && !overlays.empty() && IsWindowVisible(overlays.front()->hwnd));
